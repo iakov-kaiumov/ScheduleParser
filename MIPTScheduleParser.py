@@ -5,26 +5,29 @@ import xlwt
 import time
 import re
 
-
-RAW_DATA = 'Schedule/raw_data_2022_1/'
+RAW_DATA = 'Schedule/raw_data_2021_2/'
 UNMERGED_DATA = 'Schedule/unmerged_data/'
-VERSION = '3.0'
+VERSION = '2.8'
 
-TIME_START_ROW = 1
+TIME_START_ROW = 5
+TIME_STOP_ROW = 15
 TIME_COL = 1
 
-KEYS_ROW = 0
+KEYS_ROW = 4
 
-LEC = str((255, 153, 204))
-LAB = str((255, 255, 153))
-FRE = str((204, 255, 204))
-SEM = str((204, 255, 255))
+LEC = [str((255, 153, 204)), str((255, 128, 128))]
+LAB = [str((255, 255, 153)), str((255, 255, 153))]
+SEM = [str((204, 255, 255)), str((204, 255, 255)), str((204, 204, 255))]
+color_map = {"LEC": LEC, "LAB": LAB, "SEM": SEM}
 
 BANNED_EXPRESSIONS = ['Дни', 'Часы', 'Б', 'С', 'М']
+identifier = 0
 
 
 class ScheduleItem:
-    def __init__(self, name="", prof="", place="", day=0, type="FRE", startTime="9:00", endTime="10:25", notes=""):
+    def __init__(self, id, name="", prof="", place="", day=0, type="SEM", startTime="9:00", endTime="10:25", notes="",
+                 color="SEM"):
+        self.id = id
         self.name = name
         self.prof = prof
         self.place = place
@@ -32,7 +35,10 @@ class ScheduleItem:
         self.type = type
         self.startTime = startTime
         self.endTime = endTime
+        self.color = color
         self.notes = notes
+        self.synchronized = 1
+        self.updated = "2021-06-30 18:39:00.000000"
 
 
 def get_files(scr_dir):
@@ -123,8 +129,11 @@ def add_schedule(groups, path):
                 continue
 
             text = sheet.cell(colx=colx, rowx=rowx).value
-            item = ScheduleItem()
+            global identifier
+            identifier += 1
+            item = ScheduleItem(id=identifier)
             item.name, item.prof, item.place, item.type = handle_lesson(text)
+            item.color = item.type
             item.day = day + 1
             try:
                 item.startTime, item.endTime = list(map(insert_colon, t.split(' - ')))
@@ -155,7 +164,7 @@ def add_schedule(groups, path):
 
 
 def create_json(data):
-    return json.dumps(data, ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False, indent=4)
 
 
 def save_as_json(path, data):
@@ -164,14 +173,9 @@ def save_as_json(path, data):
 
 
 def type_by_color(color):
-    if color == SEM:
-        return "SEM"
-    elif color == LEC:
-        return "LEC"
-    elif color == LAB:
-        return "LAB"
-    elif color == FRE:
-        return "FRE"
+    for key, value in color_map.items():
+        if color in value:
+            return key
     return "SEM"
 
 
@@ -188,7 +192,7 @@ def delete_unmerged_files():
         os.remove(os.path.join(UNMERGED_DATA, f))
 
 
-def unmerge_excel_file(initial_path, final_path):
+def unmerge_excel_file(initial_path, final_path, add_color=True):
     # read merged cells for all sheets
     book = xlrd.open_workbook(initial_path, formatting_info=True)
 
@@ -203,9 +207,15 @@ def unmerge_excel_file(initial_path, final_path):
         for crange in rd_sheet.merged_cells:
             # for each merged_cell
             rlo, rhi, clo, chi = crange
-            cell_value = str(rd_sheet.cell(rlo, clo).value)
+            cell = rd_sheet.cell(rlo, clo)
+            cell_value = str(cell.value)
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                cell = xlrd.xldate.xldate_as_datetime(cell.value, datemode=0)
+                cell_value = cell.strftime("%Y-%m-%d")
+
             color = get_color(book, rd_sheet, rlo, clo)
-            cell_value += '|' + str(color)
+            if add_color:
+                cell_value += '|' + str(color)
             for rowx in range(rlo, rhi):
                 for colx in range(clo, chi):
                     wt_sheet.write(rowx, colx, cell_value)
@@ -216,9 +226,15 @@ def unmerge_excel_file(initial_path, final_path):
             for c in range(0, rd_sheet.ncols):
                 if (r, c) in written_cells:
                     continue
-                cell_value = str(rd_sheet.cell(r, c).value)
+
+                cell = rd_sheet.cell(r, c)
+                cell_value = str(cell.value)
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    cell = xlrd.xldate.xldate_as_datetime(cell.value, datemode=0)
+                    cell_value = cell.strftime("%Y-%m-%d")
                 color = get_color(book, rd_sheet, r, c)
-                cell_value += '|' + str(color)
+                if add_color:
+                    cell_value += '|' + str(color)
                 wt_sheet.write(r, c, cell_value)
 
     # save the un-merged excel file
@@ -235,18 +251,18 @@ def parse_schedule():
     for file in get_files(UNMERGED_DATA):
         add_schedule(groups, file)
 
-    print(groups['Б02-824'])
-
     j = dict()
     j['version'] = VERSION
     j['timetable'] = groups
+    print(j['timetable']['Б02-824'])
+    print(j['timetable'].keys())
     return j
 
 
 def main():
     start_time = time.time()
     save_as_json('schedule.json', parse_schedule())
-    print('Built in ' + str((time.time() - start_time) * 1000))
+    print('Built in ' + str((time.time() - start_time)) + ' seconds')
 
 
 if __name__ == '__main__':
